@@ -405,7 +405,7 @@ def parse_text(raw_text: str, source_file: str = "") -> dict:
 
     pending = flush(pending, result["items"])
 
-    # ── Remove items that are actually total/summary amounts ──────────────────
+#Remove items that are actually total/summary amounts
     if result["total"]:
         result["items"] = [i for i in result["items"] if i["total_price"] != result["total"]]
 
@@ -889,7 +889,6 @@ class ReceiptApp:
         hsb.grid(row=1, column=0, sticky="ew")
         f.grid_rowconfigure(0, weight=1); f.grid_columnconfigure(0, weight=1)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
-        self.tree.bind("<Double-1>", self._on_summary_dblclick)  # ── EDIT: double-click to edit summary row
         # Alternating row colors
         self.tree.tag_configure("odd",  background=C["card"])
         self.tree.tag_configure("even", background=C["card2"])
@@ -907,7 +906,6 @@ class ReceiptApp:
         self.items_tree.grid(row=0, column=0, sticky="nsew")
         vsb2.grid(row=0, column=1, sticky="ns")
         f.grid_rowconfigure(0, weight=1); f.grid_columnconfigure(0, weight=1)
-        self.items_tree.bind("<Double-1>", self._on_items_dblclick)  # ── EDIT: double-click to edit item row
         self.items_tree.tag_configure("odd",  background=C["card"])
         self.items_tree.tag_configure("even", background=C["card2"])
 
@@ -1127,103 +1125,6 @@ class ReceiptApp:
             self.json_text.insert("end", json.dumps(d, ensure_ascii=False, indent=2))
             self.raw_text.delete("1.0","end")
             self.raw_text.insert("end", self.records[idx].get("_raw_text",""))
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # ── MANUAL CORRECTION (remove this block to disable edit feature) ────────
-    # ══════════════════════════════════════════════════════════════════════════
-
-    def _inline_edit(self, tree, item_id, col_idx, col_name, current_val, on_save):
-        bbox = tree.bbox(item_id, column=f"#{col_idx+1}")
-        if not bbox: return
-        x, y, w, h = bbox
-        var = tk.StringVar(value=str(current_val) if current_val is not None else "")
-        entry = tk.Entry(tree, textvariable=var,
-                         font=FONT_MONO,
-                         bg=C["accent2"], fg=C["bg"],
-                         insertbackground=C["bg"],
-                         relief="flat", bd=4,
-                         highlightthickness=0)
-        entry.place(x=x, y=y, width=max(w, 140), height=h)
-        entry.focus_set(); entry.select_range(0, "end")
-
-        def save(event=None):
-            new_val = var.get().strip()
-            on_save(new_val)
-            entry.destroy()
-            self._set_status(f"✎ {col_name}  →  {new_val!r}", "warning")
-
-        def cancel(event=None):
-            entry.destroy()
-
-        entry.bind("<Return>",   save)
-        entry.bind("<Tab>",      save)
-        entry.bind("<Escape>",   cancel)
-        entry.bind("<FocusOut>", cancel)
-
-    def _on_summary_dblclick(self, event):
-        tree    = self.tree
-        item_id = tree.identify_row(event.y)
-        col_id  = tree.identify_column(event.x)
-        if not item_id or not col_id: return
-        col_idx = int(col_id.replace("#","")) - 1
-        cols    = ("_source_file","store_name","date","time","receipt_no","total","currency","payment_method")
-        display = ("File","Store","Date","Time","Receipt No","Total","Currency","Payment")
-        if col_idx >= len(cols) or cols[col_idx] == "_source_file": return
-        rec_idx = tree.index(item_id)
-        if rec_idx >= len(self.records): return
-        record  = self.records[rec_idx]
-        field   = cols[col_idx]
-
-        def save(new_val):
-            if field == "total":
-                try: new_val = float(new_val)
-                except ValueError: pass
-            record[field] = new_val if new_val != "" else None
-            vals = list(tree.item(item_id, "values"))
-            vals[col_idx] = new_val
-            tree.item(item_id, values=vals)
-            d = {k: v for k, v in record.items() if k != "_raw_text"}
-            self.json_text.delete("1.0","end")
-            self.json_text.insert("end", json.dumps(d, ensure_ascii=False, indent=2))
-
-        self._inline_edit(tree, item_id, col_idx, display[col_idx], record.get(field,""), save)
-
-    def _on_items_dblclick(self, event):
-        tree    = self.items_tree
-        item_id = tree.identify_row(event.y)
-        col_id  = tree.identify_column(event.x)
-        if not item_id or not col_id: return
-        col_idx = int(col_id.replace("#","")) - 1
-        cols    = ("_source_file_ref","name","quantity","unit_price","total_price")
-        display = ("Receipt File","Item Name","Qty","Unit Price","Total")
-        if col_idx >= len(cols) or col_idx == 0: return
-        all_ids = tree.get_children()
-        row_pos = list(all_ids).index(item_id)
-        pos = 0; target_rec = target_item = None
-        for rec in self.records:
-            for i, item in enumerate(rec.get("items") or []):
-                if pos == row_pos: target_rec, target_item = rec, i; break
-                pos += 1
-            if target_rec is not None: break
-        if target_rec is None: return
-        item_dict = target_rec["items"][target_item]
-        field = cols[col_idx]
-
-        def save(new_val):
-            if field in ("quantity","unit_price","total_price"):
-                try: new_val = float(new_val) if "." in new_val else int(new_val)
-                except ValueError: pass
-            item_dict[field] = new_val if new_val != "" else None
-            vals = list(tree.item(item_id, "values"))
-            vals[col_idx] = new_val; tree.item(item_id, values=vals)
-            d = {k: v for k, v in target_rec.items() if k != "_raw_text"}
-            self.json_text.delete("1.0","end")
-            self.json_text.insert("end", json.dumps(d, ensure_ascii=False, indent=2))
-
-        self._inline_edit(tree, item_id, col_idx, display[col_idx], item_dict.get(field,""), save)
-
-    # ── END OF MANUAL CORRECTION BLOCK ───────────────────────────────────────
-    # ══════════════════════════════════════════════════════════════════════════
 
 #Export / Clear
 

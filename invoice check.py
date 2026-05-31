@@ -405,7 +405,7 @@ def parse_text(raw_text: str, source_file: str = "") -> dict:
 
     pending = flush(pending, result["items"])
 
-    # ── Remove items that are actually total/summary amounts ──────────────────
+#Remove items that are actually total/summary amounts
     if result["total"]:
         result["items"] = [i for i in result["items"] if i["total_price"] != result["total"]]
 

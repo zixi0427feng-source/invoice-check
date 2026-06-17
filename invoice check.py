@@ -532,22 +532,22 @@ class ReceiptApp:
 
     def _build_ui(self):
     #Titlebar
-        bar = tk.Frame(self.root, bg=C["card"], height=64)
+        bar = tk.Frame(self.root, bg=C["card"], height=76)
         bar.pack(fill="x"); bar.pack_propagate(False)
 
     #Logo dot + title
         dot_frame = tk.Frame(bar, bg=C["card"])
-        dot_frame.pack(side="left", padx=(22,0), pady=20)
+        dot_frame.pack(side="left", padx=(22,0), pady=25)
         tk.Canvas(dot_frame, width=12, height=12, bg=C["card"],
                   highlightthickness=0).pack(side="left")
         self._draw_dot(dot_frame.winfo_children()[0])
 
         title_block = tk.Frame(bar, bg=C["card"])
-        title_block.pack(side="left", padx=(12,0), pady=9)
+        title_block.pack(side="left", padx=(12,0), pady=(10,8))
         tk.Label(title_block, text="ReceiptFlow", font=FONT_TITLE,
                  bg=C["card"], fg=C["text"]).pack(anchor="w")
         tk.Label(title_block, text="OCR receipt recognition, records, and analytics", font=("Segoe UI", 8),
-                 bg=C["card"], fg=C["dim"]).pack(anchor="w", pady=(1,0))
+                 bg=C["card"], fg=C["dim"]).pack(anchor="w", pady=(0,0))
 
     #Separator line
         tk.Frame(self.root, bg=C["border"], height=1).pack(fill="x")

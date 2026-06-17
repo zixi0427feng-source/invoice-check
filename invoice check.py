@@ -239,7 +239,7 @@ def parse_text(raw_text: str, source_file: str = "") -> dict:
         rf"(?:Discount\s*Given|Discount|Disc|Diskaun|Rebate|You\s*Saved|Savings)[^\d$]*{AMT}", full
     )
 
-#Tax （ collect ALL tax lines, sum them ）
+#Tax: collect ALL tax lines, sum them
     tax_lines = re.findall(
         r"(?:TAX\s*\d*|GST|SST|Service\s*Tax|Cukai)\s*(?:[\d.]+\s*%)?\s*\$?\s*([\d,]+\.\d{2})",
         full, re.IGNORECASE
@@ -418,29 +418,29 @@ def scan_receipt(image_path: str) -> dict:
 #GUI
 
 C = {
-    "bg":        "#0e0e12",
-    "sidebar":   "#13131a",
-    "card":      "#1a1a24",
-    "card2":     "#1f1f2e",
-    "border":    "#2a2a3d",
-    "accent":    "#7c6af7",      # soft violet
-    "accent2":   "#f0a500",      # warm amber
-    "green":     "#3ecf8e",      # mint green
-    "red":       "#f45b5b",
-    "text":      "#e8e8f0",
-    "dim":       "#6b6b8a",
-    "input":     "#111118",
-    "hover":     "#8f7ffb",
-    "scan_from": "#7c6af7",
-    "scan_to":   "#c084fc",
+    "bg":        "#eef3f8",
+    "sidebar":   "#ffffff",
+    "card":      "#ffffff",
+    "card2":     "#f4f7fb",
+    "border":    "#d8e1ea",
+    "accent":    "#2563eb",
+    "accent2":   "#b7791f",
+    "green":     "#0f9f6e",
+    "red":       "#d64545",
+    "text":      "#172033",
+    "dim":       "#667085",
+    "input":     "#f8fafc",
+    "hover":     "#1d4ed8",
+    "scan_from": "#2563eb",
+    "scan_to":   "#0f9f6e",
 }
 
-FONT_TITLE  = ("Segoe UI", 15, "bold")
-FONT_LABEL  = ("Segoe UI", 8)
+FONT_TITLE  = ("Segoe UI", 17, "bold")
+FONT_LABEL  = ("Segoe UI", 8, "bold")
 FONT_BODY   = ("Segoe UI", 9)
 FONT_MONO   = ("Consolas", 9)
 FONT_SCAN   = ("Segoe UI", 11, "bold")
-FONT_HEADER = ("Segoe UI", 10, "bold")
+FONT_HEADER = ("Segoe UI", 11, "bold")
 
 
 def _hex_to_rgb(h):
@@ -456,11 +456,11 @@ def _lerp_color(c1, c2, t):
 class ReceiptApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Receipt Scanner")
-        self.root.geometry("1200x760")
+        self.root.title("ReceiptFlow - OCR Receipt Manager")
+        self.root.geometry("1240x780")
         self.root.configure(bg=C["bg"])
         self.root.resizable(True, True)
-        self.root.minsize(900, 600)
+        self.root.minsize(1040, 660)
 
         self.camera         = None
         self.camera_running = False
@@ -482,10 +482,10 @@ class ReceiptApp:
         s.theme_use("clam")
 
     #Notebook
-        s.configure("App.TNotebook", background=C["card"], borderwidth=0, tabmargins=[0,0,0,0])
+        s.configure("App.TNotebook", background=C["bg"], borderwidth=0, tabmargins=[0,0,0,0])
         s.configure("App.TNotebook.Tab",
                     background=C["card2"], foreground=C["dim"],
-                    padding=[14, 7], font=FONT_BODY,
+                    padding=[18, 9], font=FONT_BODY,
                     borderwidth=0, focuscolor=C["card"])
         s.map("App.TNotebook.Tab",
               background=[("selected", C["card"]), ("active", C["card"])],
@@ -494,7 +494,7 @@ class ReceiptApp:
         s.configure("Side.TNotebook", background=C["sidebar"], borderwidth=0, tabmargins=[0,0,0,0])
         s.configure("Side.TNotebook.Tab",
                     background=C["sidebar"], foreground=C["dim"],
-                    padding=[10, 6], font=FONT_BODY, borderwidth=0)
+                    padding=[12, 7], font=FONT_BODY, borderwidth=0)
         s.map("Side.TNotebook.Tab",
               background=[("selected", C["card"]), ("active", C["card2"])],
               foreground=[("selected", C["accent"]), ("active", C["text"])])
@@ -502,12 +502,12 @@ class ReceiptApp:
     #Treeview
         s.configure("App.Treeview",
                     background=C["card"], foreground=C["text"],
-                    fieldbackground=C["card"], rowheight=30,
+                    fieldbackground=C["card"], rowheight=32,
                     font=FONT_BODY, borderwidth=0)
         s.configure("App.Treeview.Heading",
                     background=C["card2"], foreground=C["dim"],
                     font=("Segoe UI", 8, "bold"), relief="flat",
-                    borderwidth=0, padding=[8,6])
+                    borderwidth=0, padding=[10,8])
         s.map("App.Treeview",
               background=[("selected", C["accent"])],
               foreground=[("selected", "#ffffff")])
@@ -515,10 +515,10 @@ class ReceiptApp:
     #Scrollbar
         s.configure("Thin.Vertical.TScrollbar",
                     background=C["card2"], troughcolor=C["card"],
-                    borderwidth=0, arrowsize=0, width=6)
+                    borderwidth=0, arrowsize=0, width=8)
         s.configure("Thin.Horizontal.TScrollbar",
                     background=C["card2"], troughcolor=C["card"],
-                    borderwidth=0, arrowsize=0, width=6)
+                    borderwidth=0, arrowsize=0, width=8)
 
     #Progressbar
         s.configure("Scan.Horizontal.TProgressbar",
@@ -532,44 +532,46 @@ class ReceiptApp:
 
     def _build_ui(self):
     #Titlebar
-        bar = tk.Frame(self.root, bg=C["sidebar"], height=52)
+        bar = tk.Frame(self.root, bg=C["card"], height=64)
         bar.pack(fill="x"); bar.pack_propagate(False)
 
     #Logo dot + title
-        dot_frame = tk.Frame(bar, bg=C["sidebar"])
-        dot_frame.pack(side="left", padx=(18,0), pady=14)
-        tk.Canvas(dot_frame, width=10, height=10, bg=C["sidebar"],
+        dot_frame = tk.Frame(bar, bg=C["card"])
+        dot_frame.pack(side="left", padx=(22,0), pady=20)
+        tk.Canvas(dot_frame, width=12, height=12, bg=C["card"],
                   highlightthickness=0).pack(side="left")
         self._draw_dot(dot_frame.winfo_children()[0])
 
-        tk.Label(bar, text="Receipt Scanner", font=FONT_TITLE,
-                 bg=C["sidebar"], fg=C["text"]).pack(side="left", padx=(10,0))
-        tk.Label(bar, text="Tesseract OCR", font=("Segoe UI", 8),
-                 bg=C["sidebar"], fg=C["dim"]).pack(side="left", padx=(8,0), pady=(4,0))
+        title_block = tk.Frame(bar, bg=C["card"])
+        title_block.pack(side="left", padx=(12,0), pady=9)
+        tk.Label(title_block, text="ReceiptFlow", font=FONT_TITLE,
+                 bg=C["card"], fg=C["text"]).pack(anchor="w")
+        tk.Label(title_block, text="OCR invoice recognition, records, and analytics", font=("Segoe UI", 8),
+                 bg=C["card"], fg=C["dim"]).pack(anchor="w", pady=(1,0))
 
     #Separator line
         tk.Frame(self.root, bg=C["border"], height=1).pack(fill="x")
 
-    #Main layout
-        body = tk.Frame(self.root, bg=C["bg"])
+    #Main layout with a draggable splitter between modules
+        body = tk.PanedWindow(self.root, orient="horizontal", bg=C["border"],
+                              sashwidth=8, sashrelief="flat", bd=0,
+                              showhandle=False)
         body.pack(fill="both", expand=True)
 
     #Left sidebar
-        sidebar = tk.Frame(body, bg=C["sidebar"], width=300)
-        sidebar.pack(side="left", fill="y"); sidebar.pack_propagate(False)
+        sidebar = tk.Frame(body, bg=C["sidebar"], width=318)
+        sidebar.pack_propagate(False)
         self._build_sidebar(sidebar)
-
-    #Vertical divider
-        tk.Frame(body, bg=C["border"], width=1).pack(side="left", fill="y")
 
     #Right content
         content = tk.Frame(body, bg=C["bg"])
-        content.pack(side="left", fill="both", expand=True)
         self._build_content(content)
+        body.add(sidebar, minsize=260, width=318)
+        body.add(content, minsize=640)
 
     def _draw_dot(self, canvas):
-        canvas.configure(width=10, height=10)
-        canvas.create_oval(1, 1, 9, 9, fill=C["accent"], outline="")
+        canvas.configure(width=12, height=12)
+        canvas.create_oval(1, 1, 11, 11, fill=C["accent"], outline="")
 
 #Sidebar
 
@@ -580,9 +582,10 @@ class ReceiptApp:
         path_frame = tk.Frame(sec, bg=C["input"], bd=0)
         path_frame.pack(fill="x", pady=(4,0))
         tk.Entry(path_frame, textvariable=self.tess_path,
-                 font=("Consolas", 8), bg=C["input"], fg=C["accent2"],
+                 font=("Consolas", 8), bg=C["input"], fg=C["text"],
                  insertbackground=C["accent2"], relief="flat",
-                 bd=6, highlightthickness=0).pack(fill="x")
+                 bd=7, highlightthickness=1,
+                 highlightbackground=C["border"], highlightcolor=C["accent"]).pack(fill="x")
 
         tk.Frame(p, bg=C["border"], height=1).pack(fill="x", pady=10)
 
@@ -594,11 +597,16 @@ class ReceiptApp:
         prev_wrap = tk.Frame(p, bg=C["card"], padx=1, pady=1)
         prev_wrap.pack(fill="x", padx=12, pady=(0,10))
         self.preview = tk.Label(prev_wrap,
-                                text="No image selected\n\nCapture or browse",
+                                text="No receipt image selected\n\nUse Camera or File input",
                                 font=("Segoe UI", 9), bg=C["input"],
                                 fg=C["dim"], height=13, anchor="center",
                                 justify="center")
         self.preview.pack(fill="both", expand=True)
+
+        self.file_label = tk.StringVar(value="No file selected")
+        tk.Label(p, textvariable=self.file_label, font=("Segoe UI", 8),
+                 bg=C["sidebar"], fg=C["dim"], anchor="w",
+                 wraplength=270, justify="left").pack(fill="x", padx=16, pady=(0,10))
 
         tk.Frame(p, bg=C["border"], height=1).pack(fill="x", pady=(0,10))
 
@@ -607,28 +615,28 @@ class ReceiptApp:
         nb.pack(fill="x", padx=12, pady=(0,10))
 
     #Camera tab
-        ct = tk.Frame(nb, bg=C["card"]); nb.add(ct, text=" 📷  Camera ")
+        ct = tk.Frame(nb, bg=C["card"]); nb.add(ct, text="  Camera  ")
         ci = tk.Frame(ct, bg=C["card"], pady=10, padx=10); ci.pack(fill="x")
-        self.cam_btn = self._pill_btn(ci, "▶  Start Camera", self._toggle_camera, C["card2"])
+        self.cam_btn = self._pill_btn(ci, "Start Camera", self._toggle_camera, C["card2"])
         self.cam_btn.pack(fill="x", pady=(0,6))
-        self._pill_btn(ci, "⊙  Capture Photo", self._capture, C["accent"]).pack(fill="x")
+        self._pill_btn(ci, "Capture Photo", self._capture, C["accent"]).pack(fill="x")
 
     #File tab
-        ft = tk.Frame(nb, bg=C["card"]); nb.add(ft, text=" 🖼  File ")
+        ft = tk.Frame(nb, bg=C["card"]); nb.add(ft, text="  File  ")
         fi = tk.Frame(ft, bg=C["card"], pady=10, padx=10); fi.pack(fill="x")
-        self._pill_btn(fi, "⊕  Browse Image",    self._browse,          C["card2"]).pack(fill="x", pady=(0,6))
-        self._pill_btn(fi, "⊕  Select Multiple", self._browse_multiple, C["card2"]).pack(fill="x")
+        self._pill_btn(fi, "Browse Image",    self._browse,          C["card2"]).pack(fill="x", pady=(0,6))
+        self._pill_btn(fi, "Select Multiple", self._browse_multiple, C["card2"]).pack(fill="x")
 
     #Scan button
         scan_wrap = tk.Frame(p, bg=C["sidebar"]); scan_wrap.pack(fill="x", padx=12, pady=(0,10))
         self.scan_btn = tk.Button(scan_wrap,
-                                  text="  Scan Receipt",
+                                  text="Scan Receipt",
                                   font=FONT_SCAN,
                                   bg=C["accent"], fg="#ffffff",
                                   activebackground=C["hover"],
                                   activeforeground="#ffffff",
                                   relief="flat", bd=0,
-                                  pady=12, cursor="hand2",
+                                  pady=13, cursor="hand2",
                                   command=self._start_scan)
         self.scan_btn.pack(fill="x")
         self._btn_hover_effect(self.scan_btn, C["accent"], C["hover"])
@@ -643,7 +651,7 @@ class ReceiptApp:
         status_frame.pack(fill="x", padx=12, pady=(4,0))
         tk.Label(status_frame, text="STATUS", font=FONT_LABEL,
                  bg=C["card"], fg=C["dim"]).pack(anchor="w")
-        self.status_var = tk.StringVar(value="Ready — Tesseract not checked yet")
+        self.status_var = tk.StringVar(value="Ready - checking Tesseract")
         self.status_lbl = tk.Label(status_frame, textvariable=self.status_var,
                                    font=("Segoe UI", 8), bg=C["card"],
                                    fg=C["green"], anchor="w",
@@ -654,28 +662,32 @@ class ReceiptApp:
 
     def _build_content(self, p):
     #Toolbar
-        tb = tk.Frame(p, bg=C["sidebar"], height=46)
+        tb = tk.Frame(p, bg=C["bg"], height=62)
         tb.pack(fill="x"); tb.pack_propagate(False)
 
-        tk.Label(tb, text="Results", font=FONT_HEADER,
-                 bg=C["sidebar"], fg=C["text"]).pack(side="left", padx=18, pady=12)
+        title = tk.Frame(tb, bg=C["bg"])
+        title.pack(side="left", padx=22, pady=11)
+        tk.Label(title, text="ReceiptFlow Dashboard", font=("Segoe UI", 14, "bold"),
+                 bg=C["bg"], fg=C["text"]).pack(anchor="w")
+        tk.Label(title, text="Structured OCR results, line items, raw text, and spend trends",
+                 font=("Segoe UI", 8), bg=C["bg"], fg=C["dim"]).pack(anchor="w")
 
         self.count_badge = tk.Label(tb, text="0", font=("Segoe UI", 8, "bold"),
                                     bg=C["accent"], fg="#fff",
                                     padx=8, pady=2)
-        self.count_badge.pack(side="left", pady=16)
+        self.count_badge.pack(side="left", pady=20)
 
     #Right toolbar buttons
-        btn_frame = tk.Frame(tb, bg=C["sidebar"])
+        btn_frame = tk.Frame(tb, bg=C["bg"])
         btn_frame.pack(side="right", padx=12, pady=8)
-        self._tool_btn(btn_frame, "↓  Export CSV", self._export_csv, C["green"]).pack(side="right", padx=(6,0))
-        self._tool_btn(btn_frame, "⊘  Clear",      self._clear,      C["card2"]).pack(side="right")
+        self._tool_btn(btn_frame, "Export CSV", self._export_csv, C["green"]).pack(side="right", padx=(6,0))
+        self._tool_btn(btn_frame, "Clear",      self._clear,      C["card2"]).pack(side="right")
 
         tk.Frame(p, bg=C["border"], height=1).pack(fill="x")
 
     #Tabs
         nb = ttk.Notebook(p, style="App.TNotebook")
-        nb.pack(fill="both", expand=True, padx=0, pady=0)
+        nb.pack(fill="both", expand=True, padx=18, pady=18)
 
     #Summary
         t1 = tk.Frame(nb, bg=C["card"]); nb.add(t1, text="  Summary  ")
@@ -705,7 +717,7 @@ class ReceiptApp:
         ctrl.pack(fill="x")
         tk.Label(ctrl, text="Daily Spending", font=FONT_HEADER,
                  bg=C["card2"], fg=C["text"]).pack(side="left")
-        self._tool_btn(ctrl, "↻  Refresh", self._refresh_chart, C["card"]).pack(side="right")
+        self._tool_btn(ctrl, "Refresh", self._refresh_chart, C["card"]).pack(side="right")
 
     #Summary stats row
         stats_row = tk.Frame(p, bg=C["card"], pady=10, padx=16)
@@ -716,7 +728,7 @@ class ReceiptApp:
             card = tk.Frame(stats_row, bg=C["card2"], padx=14, pady=8)
             card.pack(side="left", padx=(0,10))
             tk.Label(card, text=label, font=("Segoe UI",7), bg=C["card2"], fg=C["dim"]).pack(anchor="w")
-            val_lbl = tk.Label(card, text="—", font=("Segoe UI",13,"bold"),
+            val_lbl = tk.Label(card, text="-", font=("Segoe UI",13,"bold"),
                                bg=C["card2"], fg=C["accent"])
             val_lbl.pack(anchor="w")
             self._stat_cards[key] = val_lbl
@@ -734,7 +746,7 @@ class ReceiptApp:
 
     #Tooltip label
         self._tooltip = tk.Label(p, text="", font=("Segoe UI",8),
-                                  bg=C["accent2"], fg=C["bg"],
+                                  bg=C["accent"], fg="#ffffff",
                                   padx=8, pady=4, relief="flat")
 
     def _refresh_chart(self):
@@ -755,9 +767,9 @@ class ReceiptApp:
             w = self.chart_canvas.winfo_width() or 600
             h = self.chart_canvas.winfo_height() or 300
             self.chart_canvas.create_text(w//2, h//2,
-                text="No data yet — scan some receipts first",
+                text="No data yet - scan some receipts first",
                 fill=C["dim"], font=("Segoe UI", 10))
-            for lbl in self._stat_cards.values(): lbl.configure(text="—")
+            for lbl in self._stat_cards.values(): lbl.configure(text="-")
             return
 
         sorted_dates = sorted(daily.keys())
@@ -811,7 +823,7 @@ class ReceiptApp:
         step = max(1, n // 12)
         for i, d in enumerate(dates):
             if i % step == 0 or i == n-1:
-                label = d[5:] if len(d) == 10 else d   # strip year → MM-DD
+                label = d[5:] if len(d) == 10 else d   # strip year to MM-DD
                 cv.create_text(cx(i), H - PAD_B + 10,
                                text=label, fill=C["dim"],
                                font=("Segoe UI",7), angle=30 if n > 8 else 0)
@@ -912,8 +924,8 @@ class ReceiptApp:
     def _build_json_tab(self, p):
         f = tk.Frame(p, bg=C["card"]); f.pack(fill="both", expand=True, padx=1, pady=1)
         self.json_text = tk.Text(f, font=FONT_MONO,
-                                  bg=C["input"], fg="#a0d8a0",
-                                  insertbackground=C["green"],
+                                  bg="#0f172a", fg="#bbf7d0",
+                                  insertbackground="#bbf7d0",
                                   relief="flat", bd=0,
                                   wrap="none", padx=12, pady=10,
                                   selectbackground=C["accent"],
@@ -929,8 +941,8 @@ class ReceiptApp:
     def _build_raw_tab(self, p):
         f = tk.Frame(p, bg=C["card"]); f.pack(fill="both", expand=True, padx=1, pady=1)
         self.raw_text = tk.Text(f, font=FONT_MONO,
-                                 bg=C["input"], fg=C["accent2"],
-                                 insertbackground=C["accent2"],
+                                 bg="#0f172a", fg="#fde68a",
+                                 insertbackground="#fde68a",
                                  relief="flat", bd=0,
                                  wrap="word", padx=12, pady=10,
                                  selectbackground=C["accent"],
@@ -952,11 +964,12 @@ class ReceiptApp:
         return f
 
     def _pill_btn(self, parent, text, cmd, color):
+        fg = "#ffffff" if color in (C["accent"], C["green"], C["red"]) else C["text"]
         btn = tk.Button(parent, text=text, command=cmd,
                         font=FONT_BODY,
-                        bg=color, fg=C["text"],
+                        bg=color, fg=fg,
                         activebackground=C["border"],
-                        activeforeground=C["text"],
+                        activeforeground=fg,
                         relief="flat", bd=0,
                         pady=7, cursor="hand2",
                         highlightthickness=0)
@@ -964,11 +977,12 @@ class ReceiptApp:
         return btn
 
     def _tool_btn(self, parent, text, cmd, color):
+        fg = "#ffffff" if color in (C["accent"], C["green"], C["red"]) else C["text"]
         btn = tk.Button(parent, text=text, command=cmd,
                         font=("Segoe UI", 8, "bold"),
-                        bg=color, fg=C["text"],
+                        bg=color, fg=fg,
                         activebackground=C["hover"] if color == C["accent"] else C["border"],
-                        activeforeground=C["text"],
+                        activeforeground=fg,
                         relief="flat", bd=0,
                         padx=12, pady=5, cursor="hand2",
                         highlightthickness=0)
@@ -984,9 +998,9 @@ class ReceiptApp:
         try:
             pytesseract.pytesseract.tesseract_cmd = self.tess_path.get()
             v = pytesseract.get_tesseract_version()
-            self._set_status(f"✓ Tesseract {v} ready")
+            self._set_status(f"Tesseract {v} ready")
         except Exception:
-            self._set_status("⚠ Tesseract not found. Update the path above.", "warning")
+            self._set_status("Tesseract not found. Update the path above.", "warning")
 
 #Camera
 
@@ -999,14 +1013,14 @@ class ReceiptApp:
         if not self.camera.isOpened():
             messagebox.showerror("Error", "Cannot open camera."); return
         self.camera_running = True
-        self.cam_btn.configure(text="■  Stop Camera", bg=C["red"])
+        self.cam_btn.configure(text="Stop Camera", bg=C["red"], fg="#ffffff")
         self._set_status("Camera active")
         self._cam_loop()
 
     def _stop_camera(self):
         self.camera_running = False
         if self.camera: self.camera.release(); self.camera = None
-        self.cam_btn.configure(text="▶  Start Camera", bg=C["card2"])
+        self.cam_btn.configure(text="Start Camera", bg=C["card2"], fg=C["text"])
 
     def _cam_loop(self):
         if not self.camera_running: return
@@ -1026,7 +1040,7 @@ class ReceiptApp:
         path = str(Path.home() / f"receipt_{ts}.jpg")
         cv2.imwrite(path, self.camera_frame)
         self.current_path = path
-        self._set_status(f"Captured → {Path(path).name}")
+        self._set_status(f"Captured: {Path(path).name}")
         self._stop_camera()
 
 #File browse
@@ -1038,6 +1052,7 @@ class ReceiptApp:
         if path:
             self.current_path = path; self.batch_paths = None
             self._show_preview(path)
+            self.file_label.set(f"Selected: {Path(path).name}")
             self._set_status(f"Selected  {Path(path).name}")
 
     def _browse_multiple(self):
@@ -1048,6 +1063,7 @@ class ReceiptApp:
             self.batch_paths  = list(paths)
             self.current_path = paths[0]
             self._show_preview(paths[0])
+            self.file_label.set(f"Batch selected: {len(paths)} images")
             self._set_status(f"Selected {len(paths)} images")
 
     def _show_preview(self, path):
@@ -1066,28 +1082,28 @@ class ReceiptApp:
         if not targets:
             messagebox.showwarning("Notice", "Please select an image or capture a photo first"); return
         self.batch_paths = None
-        self.scan_btn.configure(state="disabled", text="  Scanning…")
+        self.scan_btn.configure(state="disabled", text="Scanning...")
         self.progress.start(10)
         threading.Thread(target=self._worker, args=(targets,), daemon=True).start()
 
     def _worker(self, paths):
         for path in paths:
-            self._set_status(f"Scanning  {Path(path).name} …")
+            self._set_status(f"Scanning {Path(path).name}...")
             try:
                 data = scan_receipt(path)
                 self.records.append(data)
                 self.root.after(0, self._update_tables, data)
                 self.root.after(0, self._refresh_chart)
                 self._set_status(
-                    f"✓ {data.get('store_name') or Path(path).stem}"
-                    f"   {data.get('currency','MYR')} {data.get('total','—')}"
+                    f"{data.get('store_name') or Path(path).stem}"
+                    f"   {data.get('currency','MYR')} {data.get('total','-')}"
                 )
             except Exception as e:
-                self._set_status(f"✗ {Path(path).name}: {e}", "error")
+                self._set_status(f"{Path(path).name}: {e}", "error")
         self.root.after(0, self._done)
 
     def _done(self):
-        self.scan_btn.configure(state="normal", text="  Scan Receipt")
+        self.scan_btn.configure(state="normal", text="Scan Receipt")
         self.progress.stop()
         n = len(self.records)
         self.count_badge.configure(text=str(n))
@@ -1112,7 +1128,7 @@ class ReceiptApp:
         d = {k: v for k, v in data.items() if k != "_raw_text"}
         self.json_text.insert("end", json.dumps(d, ensure_ascii=False, indent=2) + "\n\n")
         self.json_text.see("end")
-        self.raw_text.insert("end", f"── {data.get('_source_file','')} ──\n{data.get('_raw_text','')}\n\n")
+        self.raw_text.insert("end", f"-- {data.get('_source_file','')} --\n{data.get('_raw_text','')}\n\n")
         self.raw_text.see("end")
 
     def _on_select(self, event):
@@ -1153,7 +1169,7 @@ class ReceiptApp:
         with open(path,"w",newline="",encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             w.writeheader(); w.writerows(rows)
-        self._set_status(f"✓ Exported {len(rows)} rows  →  {Path(path).name}")
+        self._set_status(f"Exported {len(rows)} rows to {Path(path).name}")
         messagebox.showinfo("Exported", f"Saved to:\n{path}")
 
     def _clear(self):
@@ -1165,6 +1181,7 @@ class ReceiptApp:
             self.json_text.delete("1.0","end")
             self.raw_text.delete("1.0","end")
             self.count_badge.configure(text="0")
+            self.file_label.set("No file selected")
             self._set_status("Cleared")
 
 #Status

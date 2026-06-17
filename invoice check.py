@@ -546,7 +546,7 @@ class ReceiptApp:
         title_block.pack(side="left", padx=(12,0), pady=9)
         tk.Label(title_block, text="ReceiptFlow", font=FONT_TITLE,
                  bg=C["card"], fg=C["text"]).pack(anchor="w")
-        tk.Label(title_block, text="OCR invoice recognition, records, and analytics", font=("Segoe UI", 8),
+        tk.Label(title_block, text="OCR receipt recognition, records, and analytics", font=("Segoe UI", 8),
                  bg=C["card"], fg=C["dim"]).pack(anchor="w", pady=(1,0))
 
     #Separator line

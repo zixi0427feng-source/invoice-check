@@ -12,19 +12,6 @@ from PIL import Image, ImageTk
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-COLORS = {
-    "bg":       "#1a1a2e",
-    "panel":    "#16213e",
-    "card":     "#0f3460",
-    "accent":   "#e94560",
-    "accent2":  "#f5a623",
-    "text":     "#eaeaea",
-    "text_dim": "#8892a4",
-    "success":  "#4ecca3",
-    "input_bg": "#0d2137",
-    "btn_hover":"#c73652",
-}
-
 #Known store name patterns
 KNOWN_STORES = re.compile(
     r"wal.?mart|costco|trader\s*joe|whole\s*foods|7.eleven|tesco|mydin|"
@@ -57,15 +44,10 @@ SKIP_ITEM = re.compile(
     re.IGNORECASE
 )
 
-#Walmart-style barcode item line
-WALMART_ITEM = re.compile(
-    r"^([A-Z][A-Z0-9\s\#\.\\/\&\-\'\*]{1,30?}?)\s{{2,}}\d{{6,}}\s*[A-Z]?\s+\$?([\d,]+\.\d{{2}})\s*[A-Z]?\s*$"
-)
-
 MONTHS_MY = {
     "jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
     "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12,
-    "januari":1,"februari":2,"mac":3,"april":4,"mei":5,"jun":6,
+    "januari":1,"februari":2,"mac":3,"april":4,"mei":5,
     "julai":7,"ogos":8,"september":9,"oktober":10,"november":11,"disember":12,
 }
 
@@ -441,17 +423,6 @@ FONT_BODY   = ("Segoe UI", 9)
 FONT_MONO   = ("Consolas", 9)
 FONT_SCAN   = ("Segoe UI", 11, "bold")
 FONT_HEADER = ("Segoe UI", 11, "bold")
-
-
-def _hex_to_rgb(h):
-    h = h.lstrip("#")
-    return tuple(int(h[i:i+2],16) for i in (0,2,4))
-
-def _lerp_color(c1, c2, t):
-    r1,g1,b1 = _hex_to_rgb(c1)
-    r2,g2,b2 = _hex_to_rgb(c2)
-    return f"#{int(r1+(r2-r1)*t):02x}{int(g1+(g2-g1)*t):02x}{int(b1+(b2-b1)*t):02x}"
-
 
 class ReceiptApp:
     def __init__(self, root):

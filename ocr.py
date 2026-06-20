@@ -72,7 +72,7 @@ SKIP_HEADER = re.compile(
     r"receipt|invoice|bill|tax|official|welcome|thank|tel:|fax:|phone:|"
     r"cashier|operator|pos|terminal|reg|till|table|no\.|www\.|http|"
     r"GST|SST|registration|manager|survey|feedback|see back|id #|"
-    r"give us|co\. no|business|\(\d{{3}}\)|\d{{3}}[-\s]\d{{3}}",
+    r"give us|co\. no|business|\(\d{3}\)|\d{3}[-\s]\d{3}",
     re.IGNORECASE
 )
 
@@ -127,7 +127,12 @@ def preprocess(image_path: str):
 
 def extract_text(image_path: str) -> str:
     img = preprocess(image_path)
-    text = pytesseract.image_to_string(img, lang="eng+chi_sim", config="--psm 4 --oem 3")
+    try:
+        text = pytesseract.image_to_string(img, lang="eng+chi_sim", config="--psm 4 --oem 3")
+    except pytesseract.TesseractError:
+        #The "chi_sim" language pack isn't installed on this machine.
+        #Fall back to English-only OCR instead of failing the whole scan.
+        text = pytesseract.image_to_string(img, lang="eng", config="--psm 4 --oem 3")
     return text
 
 
@@ -143,48 +148,32 @@ def _find_amount(pattern: str, text: str):
     return None
 
 
-def parse_text(raw_text: str, source_file: str = "") -> dict:
-    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
-    full  = "\n".join(lines)
+#--------------------------------------------------------------------------
+# Field-level extraction helpers. Each one takes the already-split lines
+# (or the joined full text) and returns just the piece of the result it is
+# responsible for, so parse_text() only has to assemble the pieces.
+#--------------------------------------------------------------------------
 
-    result = {
-        "store_name":     None,
-        "store_address":  None,
-        "date":           None,
-        "time":           None,
-        "cashier":        None,
-        "receipt_no":     None,
-        "items":          [],
-        "subtotal":       None,
-        "discount":       None,
-        "tax":            None,
-        "tax_type":       None,
-        "total":          None,
-        "payment_method": None,
-        "currency":       _detect_currency(full),
-        "_source_file":   source_file,
-        "_parsed_at":     datetime.now().isoformat(timespec="seconds"),
-        "_raw_text":      raw_text,
-    }
-
-#Store name
+def _extract_store(lines: list) -> tuple:
+    """Return (store_name, store_address)."""
+    store_name = None
     for line in lines[:10]:
         if KNOWN_STORES.search(line):
-            result["store_name"] = line.strip()
+            store_name = line.strip()
             break
-    if not result["store_name"]:
+    if not store_name:
         for line in lines[:8]:
             clean = line.strip()
             if (len(clean) >= 3
                     and not SKIP_HEADER.search(clean)
                     and not re.match(r"^[\d\(\+]", clean)
                     and not re.search(r"\d{5,}", clean)):
-                result["store_name"] = clean
+                store_name = clean
                 break
 
-#Store address
-    if result["store_name"] and result["store_name"] in lines:
-        idx = lines.index(result["store_name"])
+    store_address = None
+    if store_name and store_name in lines:
+        idx = lines.index(store_name)
         addr_lines = []
         for line in lines[idx+1:idx+5]:
             if re.search(r"\d{4,5}|\bjalan\b|\blorong\b|road|street|ave|blvd|dr\b|st\b|floor|level|, [a-z]{2}", line, re.IGNORECASE):
@@ -192,9 +181,12 @@ def parse_text(raw_text: str, source_file: str = "") -> dict:
             elif addr_lines:
                 break
         if addr_lines:
-            result["store_address"] = ", ".join(addr_lines)
+            store_address = ", ".join(addr_lines)
 
-#Date
+    return store_name, store_address
+
+
+def _extract_date(full: str):
     date_pats = [
         (r"(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})", "ymd"),
         (r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})", "dmy"),
@@ -207,38 +199,44 @@ def parse_text(raw_text: str, source_file: str = "") -> dict:
             g = m.groups()
             try:
                 if fmt == "ymd":
-                    result["date"] = f"{g[0]}-{int(g[1]):02d}-{int(g[2]):02d}"
+                    return f"{g[0]}-{int(g[1]):02d}-{int(g[2]):02d}"
                 elif fmt == "dmy":
-                    result["date"] = f"{g[2]}-{int(g[1]):02d}-{int(g[0]):02d}"
+                    return f"{g[2]}-{int(g[1]):02d}-{int(g[0]):02d}"
                 elif fmt == "dmy2":
                     year = int(g[2]); year += 2000 if year < 50 else 1900
-                    result["date"] = f"{year}-{int(g[1]):02d}-{int(g[0]):02d}"
+                    return f"{year}-{int(g[1]):02d}-{int(g[0]):02d}"
                 elif fmt == "dmonthy":
                     mon = MONTHS_MY.get(g[1].lower()[:3], 1)
-                    result["date"] = f"{g[2]}-{mon:02d}-{int(g[0]):02d}"
-                break
+                    return f"{g[2]}-{mon:02d}-{int(g[0]):02d}"
             except Exception:
                 continue
+    return None
 
-#Time
+
+def _extract_time(full: str):
     time_m = re.search(r"(?<!\d)(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM|am|pm)?(?!\d)", full)
-    if time_m:
-        h_val, m_val = int(time_m.group(1)), time_m.group(2)
-        ampm = (time_m.group(3) or "").upper()
-        if 0 <= h_val <= 23 and 0 <= int(m_val) <= 59:
-            if ampm == "PM" and h_val < 12: h_val += 12
-            elif ampm == "AM" and h_val == 12: h_val = 0
-            elif re.search(r"下午", full) and h_val < 12: h_val += 12
-            result["time"] = f"{h_val:02d}:{m_val}"
+    if not time_m:
+        return None
+    h_val, m_val = int(time_m.group(1)), time_m.group(2)
+    ampm = (time_m.group(3) or "").upper()
+    if 0 <= h_val <= 23 and 0 <= int(m_val) <= 59:
+        if ampm == "PM" and h_val < 12: h_val += 12
+        elif ampm == "AM" and h_val == 12: h_val = 0
+        elif re.search(r"下午", full) and h_val < 12: h_val += 12
+        return f"{h_val:02d}:{m_val}"
+    return None
 
-#Cashier
+
+def _extract_cashier(full: str):
     cm = re.search(r"(?:Cashier|Operator|Served\s*by|Pekerja|Staff|OP#?)[:\s]+([^\n\r,#]{2,30})", full, re.IGNORECASE)
     if cm:
         val = cm.group(1).strip()
         if not re.search(r"\d{4,}", val):
-            result["cashier"] = val
+            return val
+    return None
 
-#Receipt number
+
+def _extract_receipt_no(full: str):
     rcpt_pats = [
         r"Rcpt#?[:\s]*([A-Z0-9][\w\-]{2,20})",
         r"(?:Receipt|Invoice|Resit)\s*(?:No\.?)?[:\s#]*([A-Z0-9][\w\-]{2,20})",
@@ -250,45 +248,51 @@ def parse_text(raw_text: str, source_file: str = "") -> dict:
         if m:
             val = m.group(1).strip()
             if not re.match(r"^\d{4}$", val):
-                result["receipt_no"] = val
-                break
+                return val
+    return None
 
-#Amounts
+
+def _extract_amounts(full: str) -> dict:
+    """Return subtotal/discount/total/tax/tax_type/rounding/payment_method."""
+    amounts = {
+        "subtotal": None, "discount": None, "total": None,
+        "tax": None, "tax_type": None, "payment_method": None,
+    }
+
     AMT = r"\$?\s*([\d,]+(?:\.\d{1,2})?)"
 
-    result["total"] = (
+    amounts["total"] = (
         _find_amount(rf"(?:Grand\s*Total|\*+\s*Total)[^\d$]*{AMT}", full) or
         _find_amount(rf"(?:^|\n)\s*(?:Total|TOTAL|Jumlah)\s*:?[^\d$]*{AMT}", full) or
         _find_amount(rf"(?:Amount\s*Due|Amount\s*Paid|Amaun)[^\d$]*{AMT}", full)
     )
-    result["subtotal"] = _find_amount(
+    amounts["subtotal"] = _find_amount(
         rf"(?:Subtotal|Sub.?total|Net\s*Sales|Sub\s*Jumlah)[^\d$]*{AMT}", full
     )
-    result["discount"] = _find_amount(
+    amounts["discount"] = _find_amount(
         rf"(?:Discount\s*Given|Discount|Disc|Diskaun|Rebate|You\s*Saved|Savings)[^\d$]*{AMT}", full
     )
 
-#Tax: collect ALL tax lines, sum them
+    #Tax: collect ALL tax lines, sum them
     tax_lines = re.findall(
         r"(?:TAX\s*\d*|GST|SST|Service\s*Tax|Cukai)\s*(?:[\d.]+\s*%)?\s*\$?\s*([\d,]+\.\d{2})",
         full, re.IGNORECASE
     )
     if tax_lines:
         try:
-            result["tax"] = round(sum(float(x.replace(",","")) for x in tax_lines), 2)
+            amounts["tax"] = round(sum(float(x.replace(",","")) for x in tax_lines), 2)
         except Exception:
             pass
-    #Label
-        if re.search(r"GST", full, re.IGNORECASE): result["tax_type"] = "GST"
-        elif re.search(r"SST", full, re.IGNORECASE): result["tax_type"] = "SST"
-        else: result["tax_type"] = "TAX"
+        if re.search(r"GST", full, re.IGNORECASE): amounts["tax_type"] = "GST"
+        elif re.search(r"SST", full, re.IGNORECASE): amounts["tax_type"] = "SST"
+        else: amounts["tax_type"] = "TAX"
 
-#Rounding
+    #Rounding
     rounding = _find_amount(rf"(?:Rounding|Round)[^\d\-]*(-?[\d,]+\.\d{{2}})", full)
     if rounding is not None:
-        result["rounding"] = rounding
+        amounts["rounding"] = rounding
 
-#Payment method
+    #Payment method
     pay_patterns = [
         (r"\bCash\b|\bTunai\b",                              "Cash"),
         (r"Visa",                                               "Visa"),
@@ -306,92 +310,105 @@ def parse_text(raw_text: str, source_file: str = "") -> dict:
     ]
     for pat, label in pay_patterns:
         if re.search(pat, full, re.IGNORECASE):
-            result["payment_method"] = label
+            amounts["payment_method"] = label
             break
 
-#Items
-    item_std = re.compile(r"^(.+?)\s{2,}(?:RM\s*|\$\s*)?(\d[\d,]*\.\d{2})(?:\s*[A-Z])?\s*$")
-    item_wmt = re.compile(r"^([A-Z][A-Z0-9\s\#\.\&\-\'\*@]{1,28}?)\s{2,}\d{8,}\s*[A-Z]?\s+(\d[\d,]*\.\d{2})\s*[A-Z]?\s*$")
-    item_cos = re.compile(r"^[A-Z]\s+(\d{6}\s+)(.+?)\s{2,}(\d[\d,]*\.\d{2})\s*[A-Z]?\s*$")
-    item_qty_first = re.compile(r"^(\d+)\s+(.+?)\s{2,}(\d[\d,]*)\s*$")
-    qty_line = re.compile(r"^(\d+)\s*[@xX]\s*(\$?[\d,]+(?:\.\d{1,2})?)\s*$")
-    inline_qty = re.compile(r"^(.+?)\s+(\d+)\s*[xX@]\s*(\$?[\d,]+\.\d{2})\s+(\$?[\d,]+\.\d{2})\s*$")
-    item_tj = re.compile(r"^([A-Z][A-Z\s\.\/\&\-\'\d]{3,35})\s+(\$?[\d]+\.\d{2})\s*$")
+    return amounts
 
-    def clean_price(s):
-        return float(s.replace("$","").replace(",","").strip())
 
+_ITEM_STD       = re.compile(r"^(.+?)\s{2,}(?:RM\s*|\$\s*)?(\d[\d,]*\.\d{2})(?:\s*[A-Z])?\s*$")
+_ITEM_WMT       = re.compile(r"^([A-Z][A-Z0-9\s\#\.\&\-\'\*@]{1,28}?)\s{2,}\d{8,}\s*[A-Z]?\s+(\d[\d,]*\.\d{2})\s*[A-Z]?\s*$")
+_ITEM_COS       = re.compile(r"^[A-Z]\s+(\d{6}\s+)(.+?)\s{2,}(\d[\d,]*\.\d{2})\s*[A-Z]?\s*$")
+_ITEM_QTY_FIRST = re.compile(r"^(\d+)\s+(.+?)\s{2,}(\d[\d,]*)\s*$")
+_QTY_LINE       = re.compile(r"^(\d+)\s*[@xX]\s*(\$?[\d,]+(?:\.\d{1,2})?)\s*$")
+_INLINE_QTY     = re.compile(r"^(.+?)\s+(\d+)\s*[xX@]\s*(\$?[\d,]+\.\d{2})\s+(\$?[\d,]+\.\d{2})\s*$")
+_ITEM_TJ        = re.compile(r"^([A-Z][A-Z\s\.\/\&\-\'\d]{3,35})\s+(\$?[\d]+\.\d{2})\s*$")
+
+
+def _clean_price(s: str) -> float:
+    return float(s.replace("$","").replace(",","").strip())
+
+
+def _extract_items(lines: list) -> list:
+    """Walk the OCR lines and pull out individual purchased items.
+
+    A handful of receipt layouts are tried per line (inline qty/price,
+    quantity-on-its-own-line, Walmart/Costco-style codes, a generic
+    "name ... price" fallback, etc). A `pending` item is carried across
+    lines so a name/price split across two OCR lines is reassembled.
+    """
+    items = []
     pending = None
 
-    def flush(p, items):
+    def flush(p):
         if p: items.append(p)
         return None
 
     for line in lines:
         if len(line) < 3:
-            pending = flush(pending, result["items"]); continue
+            pending = flush(pending); continue
         if SKIP_ITEM.search(line):
-            pending = flush(pending, result["items"]); continue
+            pending = flush(pending); continue
 
-        m = inline_qty.match(line)
+        m = _INLINE_QTY.match(line)
         if m:
             name = m.group(1).strip()
             if not SKIP_ITEM.search(name):
-                pending = flush(pending, result["items"])
+                pending = flush(pending)
                 try:
-                    result["items"].append({
+                    items.append({
                         "name": name, "quantity": int(m.group(2)),
-                        "unit_price": clean_price(m.group(3)),
-                        "total_price": clean_price(m.group(4)),
+                        "unit_price": _clean_price(m.group(3)),
+                        "total_price": _clean_price(m.group(4)),
                     })
                 except Exception: pass
                 continue
 
-        m = qty_line.match(line)
+        m = _QTY_LINE.match(line)
         if m and pending:
             try:
                 pending["quantity"]   = int(m.group(1))
-                pending["unit_price"] = clean_price(m.group(2))
+                pending["unit_price"] = _clean_price(m.group(2))
             except Exception: pass
-            pending = flush(pending, result["items"])
+            pending = flush(pending)
             continue
 
-        m = item_cos.match(line)
+        m = _ITEM_COS.match(line)
         if m:
             name = m.group(2).strip()
             if not SKIP_ITEM.search(name):
-                pending = flush(pending, result["items"])
+                pending = flush(pending)
                 try:
-                    result["items"].append({
+                    items.append({
                         "name": name, "quantity": 1,
-                        "unit_price": clean_price(m.group(3)),
-                        "total_price": clean_price(m.group(3)),
+                        "unit_price": _clean_price(m.group(3)),
+                        "total_price": _clean_price(m.group(3)),
                     })
                 except Exception: pass
                 continue
 
-        m = item_wmt.match(line)
+        m = _ITEM_WMT.match(line)
         if m:
             name = m.group(1).strip()
             if not SKIP_ITEM.search(name):
-                pending = flush(pending, result["items"])
+                pending = flush(pending)
                 try:
-                    result["items"].append({
+                    items.append({
                         "name": name, "quantity": 1,
-                        "unit_price": clean_price(m.group(2)),
-                        "total_price": clean_price(m.group(2)),
+                        "unit_price": _clean_price(m.group(2)),
+                        "total_price": _clean_price(m.group(2)),
                     })
                 except Exception: pass
                 continue
 
-        m = item_qty_first.match(line)
+        m = _ITEM_QTY_FIRST.match(line)
         if m:
             qty_val, name = int(m.group(1)), m.group(2).strip()
             if not SKIP_ITEM.search(name) and not SKIP_HEADER.search(name):
-                pending = flush(pending, result["items"])
+                pending = flush(pending)
                 try:
-                    total = clean_price(m.group(3))
-                    result["items"].append({
+                    total = _clean_price(m.group(3))
+                    items.append({
                         "name": name, "quantity": qty_val,
                         "unit_price": round(total / qty_val, 2),
                         "total_price": total,
@@ -399,46 +416,80 @@ def parse_text(raw_text: str, source_file: str = "") -> dict:
                 except Exception: pass
                 continue
 
-        m = item_std.match(line)
+        m = _ITEM_STD.match(line)
         if m:
             name = m.group(1).strip()
             if SKIP_ITEM.search(name) or SKIP_HEADER.search(name):
-                pending = flush(pending, result["items"]); continue
+                pending = flush(pending); continue
             try:
-                price = clean_price(m.group(2))
+                price = _clean_price(m.group(2))
                 if price > 99999: continue
             except Exception: continue
-            pending = flush(pending, result["items"])
+            pending = flush(pending)
             pending = {"name": name, "quantity": 1, "unit_price": price, "total_price": price}
             continue
 
-        m = item_tj.match(line)
+        m = _ITEM_TJ.match(line)
         if m:
             name = m.group(1).strip()
             if SKIP_ITEM.search(name) or SKIP_HEADER.search(name):
-                pending = flush(pending, result["items"]); continue
+                pending = flush(pending); continue
             try:
-                price = clean_price(m.group(2))
+                price = _clean_price(m.group(2))
                 if price > 99999: continue
             except Exception: continue
-            pending = flush(pending, result["items"])
+            pending = flush(pending)
             pending = {"name": name, "quantity": 1, "unit_price": price, "total_price": price}
             continue
 
-    #Continuation line
+        #Continuation line
         if pending:
             if not re.search(r"\d{2}:\d{2}|\d{4}[/\-]|\b\d+\.\d{2}\b|\d{6,}", line):
                 pending["name"] += " " + line
             else:
-                pending = flush(pending, result["items"])
+                pending = flush(pending)
 
-    pending = flush(pending, result["items"])
+    flush(pending)
+    return items
 
-#Remove items that are actually total/summary amounts
-    if result["total"]:
-        result["items"] = [i for i in result["items"] if i["total_price"] != result["total"]]
+
+def parse_text(raw_text: str, source_file: str = "") -> dict:
+    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+    full  = "\n".join(lines)
+
+    store_name, store_address = _extract_store(lines)
+    amounts = _extract_amounts(full)
+    items = _extract_items(lines)
+
+    #Remove items that are actually total/summary amounts
+    if amounts["total"]:
+        items = [i for i in items if i["total_price"] != amounts["total"]]
+
+    result = {
+        "store_name":     store_name,
+        "store_address":  store_address,
+        "date":           _extract_date(full),
+        "time":           _extract_time(full),
+        "cashier":        _extract_cashier(full),
+        "receipt_no":     _extract_receipt_no(full),
+        "items":          items,
+        "subtotal":       amounts["subtotal"],
+        "discount":       amounts["discount"],
+        "tax":            amounts["tax"],
+        "tax_type":       amounts["tax_type"],
+        "total":          amounts["total"],
+        "payment_method": amounts["payment_method"],
+        "currency":       _detect_currency(full),
+        "_source_file":   source_file,
+        "_parsed_at":     datetime.now().isoformat(timespec="seconds"),
+        "_raw_text":      raw_text,
+    }
+
+    if "rounding" in amounts:
+        result["rounding"] = amounts["rounding"]
 
     return result
+
 
 def scan_receipt(image_path: str) -> dict:
     return parse_text(extract_text(image_path), Path(image_path).name)

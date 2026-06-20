@@ -1,0 +1,796 @@
+"""ReceiptFlow desktop app: Tkinter GUI for OCR receipt scanning.
+
+All OCR/parsing logic lives in ocr.py; this module only handles the
+user interface (camera capture, file selection, results display,
+CSV export).
+"""
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+import json
+import csv
+from pathlib import Path
+from datetime import datetime
+
+import cv2
+import pytesseract
+from PIL import Image, ImageTk
+
+from ocr import scan_receipt
+
+#GUI
+
+C = {
+    "bg":        "#eef3f8",
+    "sidebar":   "#ffffff",
+    "card":      "#ffffff",
+    "card2":     "#f4f7fb",
+    "border":    "#d8e1ea",
+    "accent":    "#2563eb",
+    "accent2":   "#b7791f",
+    "green":     "#0f9f6e",
+    "red":       "#d64545",
+    "text":      "#172033",
+    "dim":       "#667085",
+    "input":     "#f8fafc",
+    "hover":     "#1d4ed8",
+    "scan_from": "#2563eb",
+    "scan_to":   "#0f9f6e",
+}
+
+FONT_TITLE  = ("Segoe UI", 17, "bold")
+FONT_LABEL  = ("Segoe UI", 8, "bold")
+FONT_BODY   = ("Segoe UI", 9)
+FONT_MONO   = ("Consolas", 9)
+FONT_SCAN   = ("Segoe UI", 11, "bold")
+FONT_HEADER = ("Segoe UI", 11, "bold")
+
+class ReceiptApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("ReceiptFlow - OCR Receipt Manager")
+        self.root.geometry("1240x780")
+        self.root.configure(bg=C["bg"])
+        self.root.resizable(True, True)
+        self.root.minsize(1040, 660)
+
+        self.camera         = None
+        self.camera_running = False
+        self.camera_frame   = None
+        self.current_path   = None
+        self.batch_paths    = None
+        self.records        = []
+        self._scan_anim_step = 0
+        self._scan_anim_id   = None
+
+        self._styles()
+        self._build_ui()
+        self._check_tesseract()
+
+#Styles
+
+    def _styles(self):
+        s = ttk.Style()
+        s.theme_use("clam")
+
+    #Notebook
+        s.configure("App.TNotebook", background=C["bg"], borderwidth=0, tabmargins=[0,0,0,0])
+        s.configure("App.TNotebook.Tab",
+                    background=C["card2"], foreground=C["dim"],
+                    padding=[18, 9], font=FONT_BODY,
+                    borderwidth=0, focuscolor=C["card"])
+        s.map("App.TNotebook.Tab",
+              background=[("selected", C["card"]), ("active", C["card"])],
+              foreground=[("selected", C["accent"]), ("active", C["text"])])
+
+        s.configure("Side.TNotebook", background=C["sidebar"], borderwidth=0, tabmargins=[0,0,0,0])
+        s.configure("Side.TNotebook.Tab",
+                    background=C["sidebar"], foreground=C["dim"],
+                    padding=[12, 7], font=FONT_BODY, borderwidth=0)
+        s.map("Side.TNotebook.Tab",
+              background=[("selected", C["card"]), ("active", C["card2"])],
+              foreground=[("selected", C["accent"]), ("active", C["text"])])
+
+    #Treeview
+        s.configure("App.Treeview",
+                    background=C["card"], foreground=C["text"],
+                    fieldbackground=C["card"], rowheight=32,
+                    font=FONT_BODY, borderwidth=0)
+        s.configure("App.Treeview.Heading",
+                    background=C["card2"], foreground=C["dim"],
+                    font=("Segoe UI", 8, "bold"), relief="flat",
+                    borderwidth=0, padding=[10,8])
+        s.map("App.Treeview",
+              background=[("selected", C["accent"])],
+              foreground=[("selected", "#ffffff")])
+
+    #Scrollbar
+        s.configure("Thin.Vertical.TScrollbar",
+                    background=C["card2"], troughcolor=C["card"],
+                    borderwidth=0, arrowsize=0, width=8)
+        s.configure("Thin.Horizontal.TScrollbar",
+                    background=C["card2"], troughcolor=C["card"],
+                    borderwidth=0, arrowsize=0, width=8)
+
+    #Progressbar
+        s.configure("Scan.Horizontal.TProgressbar",
+                    background=C["accent"], troughcolor=C["card2"],
+                    borderwidth=0, thickness=3)
+
+        s.configure("TFrame", background=C["bg"])
+        s.configure("Card.TFrame", background=C["card"])
+
+#UI
+
+    def _build_ui(self):
+    #Titlebar
+        bar = tk.Frame(self.root, bg=C["card"], height=76)
+        bar.pack(fill="x"); bar.pack_propagate(False)
+
+    #Logo dot + title
+        dot_frame = tk.Frame(bar, bg=C["card"])
+        dot_frame.pack(side="left", padx=(22,0), pady=25)
+        tk.Canvas(dot_frame, width=12, height=12, bg=C["card"],
+                  highlightthickness=0).pack(side="left")
+        self._draw_dot(dot_frame.winfo_children()[0])
+
+        title_block = tk.Frame(bar, bg=C["card"])
+        title_block.pack(side="left", padx=(12,0), pady=(10,8))
+        tk.Label(title_block, text="ReceiptFlow", font=FONT_TITLE,
+                 bg=C["card"], fg=C["text"]).pack(anchor="w")
+        tk.Label(title_block, text="OCR receipt recognition, records, and analytics", font=("Segoe UI", 8),
+                 bg=C["card"], fg=C["dim"]).pack(anchor="w", pady=(0,0))
+
+    #Separator line
+        tk.Frame(self.root, bg=C["border"], height=1).pack(fill="x")
+
+    #Main layout with a draggable splitter between modules
+        body = tk.PanedWindow(self.root, orient="horizontal", bg=C["border"],
+                              sashwidth=8, sashrelief="flat", bd=0,
+                              showhandle=False)
+        body.pack(fill="both", expand=True)
+
+    #Left sidebar
+        sidebar = tk.Frame(body, bg=C["sidebar"], width=318)
+        sidebar.pack_propagate(False)
+        self._build_sidebar(sidebar)
+
+    #Right content
+        content = tk.Frame(body, bg=C["bg"])
+        self._build_content(content)
+        body.add(sidebar, minsize=260, width=318)
+        body.add(content, minsize=640)
+
+    def _draw_dot(self, canvas):
+        canvas.configure(width=12, height=12)
+        canvas.create_oval(1, 1, 11, 11, fill=C["accent"], outline="")
+
+#Sidebar
+
+    def _build_sidebar(self, p):
+        # Tesseract path
+        sec = self._section(p, "TESSERACT PATH")
+        self.tess_path = tk.StringVar(value=pytesseract.pytesseract.tesseract_cmd)
+        path_frame = tk.Frame(sec, bg=C["input"], bd=0)
+        path_frame.pack(fill="x", pady=(4,0))
+        tk.Entry(path_frame, textvariable=self.tess_path,
+                 font=("Consolas", 8), bg=C["input"], fg=C["text"],
+                 insertbackground=C["accent2"], relief="flat",
+                 bd=7, highlightthickness=1,
+                 highlightbackground=C["border"], highlightcolor=C["accent"]).pack(fill="x")
+
+        tk.Frame(p, bg=C["border"], height=1).pack(fill="x", pady=10)
+
+    #Image preview
+        prev_label = tk.Label(p, text="PREVIEW", font=FONT_LABEL,
+                              bg=C["sidebar"], fg=C["dim"])
+        prev_label.pack(anchor="w", padx=16, pady=(0,6))
+
+        prev_wrap = tk.Frame(p, bg=C["card"], padx=1, pady=1)
+        prev_wrap.pack(fill="x", padx=12, pady=(0,10))
+        self.preview = tk.Label(prev_wrap,
+                                text="No receipt image selected\n\nUse Camera or File input",
+                                font=("Segoe UI", 9), bg=C["input"],
+                                fg=C["dim"], height=13, anchor="center",
+                                justify="center")
+        self.preview.pack(fill="both", expand=True)
+
+        self.file_label = tk.StringVar(value="No file selected")
+        tk.Label(p, textvariable=self.file_label, font=("Segoe UI", 8),
+                 bg=C["sidebar"], fg=C["dim"], anchor="w",
+                 wraplength=270, justify="left").pack(fill="x", padx=16, pady=(0,10))
+
+        tk.Frame(p, bg=C["border"], height=1).pack(fill="x", pady=(0,10))
+
+    #Input tabs
+        nb = ttk.Notebook(p, style="Side.TNotebook")
+        nb.pack(fill="x", padx=12, pady=(0,10))
+
+    #Camera tab
+        ct = tk.Frame(nb, bg=C["card"]); nb.add(ct, text="  Camera  ")
+        ci = tk.Frame(ct, bg=C["card"], pady=10, padx=10); ci.pack(fill="x")
+        self.cam_btn = self._pill_btn(ci, "Start Camera", self._toggle_camera, C["card2"])
+        self.cam_btn.pack(fill="x", pady=(0,6))
+        self._pill_btn(ci, "Capture Photo", self._capture, C["accent"]).pack(fill="x")
+
+    #File tab
+        ft = tk.Frame(nb, bg=C["card"]); nb.add(ft, text="  File  ")
+        fi = tk.Frame(ft, bg=C["card"], pady=10, padx=10); fi.pack(fill="x")
+        self._pill_btn(fi, "Browse Image",    self._browse,          C["card2"]).pack(fill="x", pady=(0,6))
+        self._pill_btn(fi, "Select Multiple", self._browse_multiple, C["card2"]).pack(fill="x")
+
+    #Scan button
+        scan_wrap = tk.Frame(p, bg=C["sidebar"]); scan_wrap.pack(fill="x", padx=12, pady=(0,10))
+        self.scan_btn = tk.Button(scan_wrap,
+                                  text="Scan Receipt",
+                                  font=FONT_SCAN,
+                                  bg=C["accent"], fg="#ffffff",
+                                  activebackground=C["hover"],
+                                  activeforeground="#ffffff",
+                                  relief="flat", bd=0,
+                                  pady=13, cursor="hand2",
+                                  command=self._start_scan)
+        self.scan_btn.pack(fill="x")
+        self._btn_hover_effect(self.scan_btn, C["accent"], C["hover"])
+
+    #Progress bar
+        self.progress = ttk.Progressbar(p, mode="indeterminate",
+                                        style="Scan.Horizontal.TProgressbar")
+        self.progress.pack(fill="x", padx=12, pady=(0,4))
+
+    #Status
+        status_frame = tk.Frame(p, bg=C["card"], padx=12, pady=10)
+        status_frame.pack(fill="x", padx=12, pady=(4,0))
+        tk.Label(status_frame, text="STATUS", font=FONT_LABEL,
+                 bg=C["card"], fg=C["dim"]).pack(anchor="w")
+        self.status_var = tk.StringVar(value="Ready - checking Tesseract")
+        self.status_lbl = tk.Label(status_frame, textvariable=self.status_var,
+                                   font=("Segoe UI", 8), bg=C["card"],
+                                   fg=C["green"], anchor="w",
+                                   wraplength=260, justify="left")
+        self.status_lbl.pack(fill="x", pady=(4,0))
+
+#Content area
+
+    def _build_content(self, p):
+    #Toolbar
+        tb = tk.Frame(p, bg=C["bg"], height=62)
+        tb.pack(fill="x"); tb.pack_propagate(False)
+
+        title = tk.Frame(tb, bg=C["bg"])
+        title.pack(side="left", padx=22, pady=11)
+        tk.Label(title, text="ReceiptFlow Dashboard", font=("Segoe UI", 14, "bold"),
+                 bg=C["bg"], fg=C["text"]).pack(anchor="w")
+        tk.Label(title, text="Structured OCR results, line items, raw text, and spend trends",
+                 font=("Segoe UI", 8), bg=C["bg"], fg=C["dim"]).pack(anchor="w")
+
+        self.count_badge = tk.Label(tb, text="0", font=("Segoe UI", 8, "bold"),
+                                    bg=C["accent"], fg="#fff",
+                                    padx=8, pady=2)
+        self.count_badge.pack(side="left", pady=20)
+
+    #Right toolbar buttons
+        btn_frame = tk.Frame(tb, bg=C["bg"])
+        btn_frame.pack(side="right", padx=12, pady=8)
+        self._tool_btn(btn_frame, "Export CSV", self._export_csv, C["green"]).pack(side="right", padx=(6,0))
+        self._tool_btn(btn_frame, "Clear",      self._clear,      C["card2"]).pack(side="right")
+
+        tk.Frame(p, bg=C["border"], height=1).pack(fill="x")
+
+    #Tabs
+        nb = ttk.Notebook(p, style="App.TNotebook")
+        nb.pack(fill="both", expand=True, padx=18, pady=18)
+
+    #Summary
+        t1 = tk.Frame(nb, bg=C["card"]); nb.add(t1, text="  Summary  ")
+        self._build_summary_tab(t1)
+
+    #Items
+        t2 = tk.Frame(nb, bg=C["card"]); nb.add(t2, text="  Items  ")
+        self._build_items_tab(t2)
+
+    #JSON
+        t3 = tk.Frame(nb, bg=C["card"]); nb.add(t3, text="  JSON  ")
+        self._build_json_tab(t3)
+
+    #Raw OCR
+        t4 = tk.Frame(nb, bg=C["card"]); nb.add(t4, text="  Raw OCR  ")
+        self._build_raw_tab(t4)
+
+    #Analytics
+        t5 = tk.Frame(nb, bg=C["card"]); nb.add(t5, text="  Analytics  ")
+        self._build_analytics_tab(t5)
+
+
+    def _build_analytics_tab(self, p):
+        """Daily spending line chart."""
+    #Top controls bar
+        ctrl = tk.Frame(p, bg=C["card2"], pady=8, padx=16)
+        ctrl.pack(fill="x")
+        tk.Label(ctrl, text="Daily Spending", font=FONT_HEADER,
+                 bg=C["card2"], fg=C["text"]).pack(side="left")
+        self._tool_btn(ctrl, "Refresh", self._refresh_chart, C["card"]).pack(side="right")
+
+    #Summary stats row
+        stats_row = tk.Frame(p, bg=C["card"], pady=10, padx=16)
+        stats_row.pack(fill="x")
+        self._stat_cards = {}
+        for key, label in [("total_spent","Total Spent"),("avg_day","Avg / Day"),
+                            ("max_day","Highest Day"),("receipts","Receipts")]:
+            card = tk.Frame(stats_row, bg=C["card2"], padx=14, pady=8)
+            card.pack(side="left", padx=(0,10))
+            tk.Label(card, text=label, font=("Segoe UI",7), bg=C["card2"], fg=C["dim"]).pack(anchor="w")
+            val_lbl = tk.Label(card, text="-", font=("Segoe UI",13,"bold"),
+                               bg=C["card2"], fg=C["accent"])
+            val_lbl.pack(anchor="w")
+            self._stat_cards[key] = val_lbl
+
+        tk.Frame(p, bg=C["border"], height=1).pack(fill="x")
+
+    #Canvas for chart
+        self.chart_canvas = tk.Canvas(p, bg=C["card"], highlightthickness=0,
+                                       bd=0, cursor="crosshair")
+        self.chart_canvas.pack(fill="both", expand=True, padx=16, pady=16)
+        self.chart_canvas.bind("<Configure>", lambda e: self._refresh_chart())
+        self.chart_canvas.bind("<Motion>", self._chart_hover)
+        self._chart_data   = []   # list of (date_str, amount)
+        self._chart_points = []   # list of (cx, cy, date_str, amount) for hover
+
+    #Tooltip label
+        self._tooltip = tk.Label(p, text="", font=("Segoe UI",8),
+                                  bg=C["accent"], fg="#ffffff",
+                                  padx=8, pady=4, relief="flat")
+
+    def _refresh_chart(self):
+        """Aggregate records by date and redraw the line chart."""
+        from collections import defaultdict
+
+    #Aggregate
+        daily = defaultdict(float)
+        for r in self.records:
+            date = r.get("date")
+            total = r.get("total")
+            if date and total:
+                try: daily[date] += float(total)
+                except (ValueError, TypeError): pass
+
+        if not daily:
+            self.chart_canvas.delete("all")
+            w = self.chart_canvas.winfo_width() or 600
+            h = self.chart_canvas.winfo_height() or 300
+            self.chart_canvas.create_text(w//2, h//2,
+                text="No data yet - scan some receipts first",
+                fill=C["dim"], font=("Segoe UI", 10))
+            for lbl in self._stat_cards.values(): lbl.configure(text="-")
+            return
+
+        sorted_dates = sorted(daily.keys())
+        amounts      = [daily[d] for d in sorted_dates]
+        self._chart_data = list(zip(sorted_dates, amounts))
+
+    #Update stat cards
+        total_spent = sum(amounts)
+        avg_day     = total_spent / len(amounts)
+        max_day     = max(amounts)
+        receipts    = len(self.records)
+        currency    = self.records[0].get("currency","MYR") if self.records else "MYR"
+        self._stat_cards["total_spent"].configure(text=f"{currency} {total_spent:,.2f}")
+        self._stat_cards["avg_day"].configure(text=f"{currency} {avg_day:,.2f}")
+        self._stat_cards["max_day"].configure(text=f"{currency} {max_day:,.2f}")
+        self._stat_cards["receipts"].configure(text=str(receipts))
+
+        self._draw_chart(sorted_dates, amounts)
+
+    def _draw_chart(self, dates, amounts):
+        cv = self.chart_canvas
+        cv.delete("all")
+        W = cv.winfo_width()
+        H = cv.winfo_height()
+        if W < 50 or H < 50: return
+
+        PAD_L, PAD_R, PAD_T, PAD_B = 64, 24, 24, 52
+        n   = len(dates)
+        max_val = max(amounts) if amounts else 1
+        min_val = 0
+
+        def cx(i):
+            if n == 1: return PAD_L + (W - PAD_L - PAD_R) // 2
+            return PAD_L + int(i / (n-1) * (W - PAD_L - PAD_R))
+
+        def cy(v):
+            ratio = (v - min_val) / (max_val - min_val) if max_val != min_val else 0.5
+            return PAD_T + int((1 - ratio) * (H - PAD_T - PAD_B))
+
+    #Grid lines & Y labels
+        y_steps = 5
+        for i in range(y_steps + 1):
+            v    = min_val + (max_val - min_val) * i / y_steps
+            y    = cy(v)
+            cv.create_line(PAD_L, y, W - PAD_R, y,
+                           fill=C["border"], dash=(4,4), width=1)
+            cv.create_text(PAD_L - 6, y, text=f"{v:,.0f}",
+                           anchor="e", fill=C["dim"], font=("Segoe UI",7))
+
+    # X labels
+        step = max(1, n // 12)
+        for i, d in enumerate(dates):
+            if i % step == 0 or i == n-1:
+                label = d[5:] if len(d) == 10 else d   # strip year to MM-DD
+                cv.create_text(cx(i), H - PAD_B + 10,
+                               text=label, fill=C["dim"],
+                               font=("Segoe UI",7), angle=30 if n > 8 else 0)
+
+    #Gradient fill under line
+        pts = [(cx(i), cy(v)) for i, v in enumerate(amounts)]
+        baseline = H - PAD_B
+        for xi in range(PAD_L, W - PAD_R):
+            seg = 0
+            for k in range(len(pts)-1):
+                if pts[k][0] <= xi <= pts[k+1][0]:
+                    seg = k; break
+            if len(pts) > 1 and pts[seg][0] != pts[seg+1][0]:
+                t  = (xi - pts[seg][0]) / (pts[seg+1][0] - pts[seg][0])
+                yi = int(pts[seg][1] + t * (pts[seg+1][1] - pts[seg][1]))
+            else:
+                yi = pts[seg][1] if pts else baseline
+            alpha = int(40 + 60 * (baseline - yi) / max(baseline - PAD_T, 1))
+            shade = f"#{max(0,min(255, alpha)):02x}{max(0,min(255,alpha//2)):02x}{max(0,min(255,180)):02x}"
+            cv.create_line(xi, yi, xi, baseline, fill=shade, width=1)
+
+    #Line
+        if len(pts) > 1:
+            flat = [coord for pt in pts for coord in pt]
+            cv.create_line(*flat, fill=C["accent"], width=2, smooth=True)
+
+    #Dots & store hover data
+        self._chart_points = []
+        for i, (x, y) in enumerate(pts):
+            cv.create_oval(x-5, y-5, x+5, y+5,
+                           fill=C["card"], outline=C["accent"], width=2)
+            self._chart_points.append((x, y, dates[i], amounts[i]))
+
+    #Axes
+        cv.create_line(PAD_L, PAD_T, PAD_L, H-PAD_B, fill=C["border"], width=1)
+        cv.create_line(PAD_L, H-PAD_B, W-PAD_R, H-PAD_B, fill=C["border"], width=1)
+
+    def _chart_hover(self, event):
+        """Show tooltip near nearest data point."""
+        if not self._chart_points: return
+        mx, my = event.x, event.y
+    #Find nearest point within 30px
+        nearest = None
+        best    = 30
+        for (px, py, date, amt) in self._chart_points:
+            dist = ((mx-px)**2 + (my-py)**2) ** 0.5
+            if dist < best:
+                best = dist; nearest = (px, py, date, amt)
+        if nearest:
+            px, py, date, amt = nearest
+            currency = self.records[0].get("currency","MYR") if self.records else "MYR"
+            self._tooltip.configure(text=f"{date}   {currency} {amt:,.2f}")
+            # Position tooltip near the dot, stay inside window
+            tx = px + 12
+            ty = py - 28
+            self._tooltip.place(in_=self.chart_canvas, x=tx, y=ty)
+            self._tooltip.lift()
+        else:
+            self._tooltip.place_forget()
+
+    def _build_summary_tab(self, p):
+        cols = ("File", "Store", "Date", "Time", "Receipt No", "Total", "Currency", "Payment")
+        widths = [130, 160, 90, 70, 120, 75, 70, 110]
+        f = tk.Frame(p, bg=C["card"]); f.pack(fill="both", expand=True, padx=1, pady=1)
+        self.tree = ttk.Treeview(f, columns=cols, show="headings",
+                                  selectmode="browse", style="App.Treeview")
+        for col, w in zip(cols, widths):
+            self.tree.heading(col, text=col, anchor="w")
+            self.tree.column(col, width=w, anchor="w", minwidth=50)
+        vsb = ttk.Scrollbar(f, orient="vertical", command=self.tree.yview, style="Thin.Vertical.TScrollbar")
+        hsb = ttk.Scrollbar(f, orient="horizontal", command=self.tree.xview, style="Thin.Horizontal.TScrollbar")
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        f.grid_rowconfigure(0, weight=1); f.grid_columnconfigure(0, weight=1)
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        # Alternating row colors
+        self.tree.tag_configure("odd",  background=C["card"])
+        self.tree.tag_configure("even", background=C["card2"])
+
+    def _build_items_tab(self, p):
+        cols2 = ("Receipt File", "Item Name", "Qty", "Unit Price", "Total")
+        widths2 = [140, 280, 55, 90, 90]
+        f = tk.Frame(p, bg=C["card"]); f.pack(fill="both", expand=True, padx=1, pady=1)
+        self.items_tree = ttk.Treeview(f, columns=cols2, show="headings", style="App.Treeview")
+        for col, w in zip(cols2, widths2):
+            self.items_tree.heading(col, text=col, anchor="w")
+            self.items_tree.column(col, width=w, anchor="w", minwidth=40)
+        vsb2 = ttk.Scrollbar(f, orient="vertical", command=self.items_tree.yview, style="Thin.Vertical.TScrollbar")
+        self.items_tree.configure(yscrollcommand=vsb2.set)
+        self.items_tree.grid(row=0, column=0, sticky="nsew")
+        vsb2.grid(row=0, column=1, sticky="ns")
+        f.grid_rowconfigure(0, weight=1); f.grid_columnconfigure(0, weight=1)
+        self.items_tree.tag_configure("odd",  background=C["card"])
+        self.items_tree.tag_configure("even", background=C["card2"])
+
+    def _build_json_tab(self, p):
+        f = tk.Frame(p, bg=C["card"]); f.pack(fill="both", expand=True, padx=1, pady=1)
+        self.json_text = tk.Text(f, font=FONT_MONO,
+                                  bg="#0f172a", fg="#bbf7d0",
+                                  insertbackground="#bbf7d0",
+                                  relief="flat", bd=0,
+                                  wrap="none", padx=12, pady=10,
+                                  selectbackground=C["accent"],
+                                  highlightthickness=0)
+        vsb = ttk.Scrollbar(f, orient="vertical", command=self.json_text.yview, style="Thin.Vertical.TScrollbar")
+        hsb = ttk.Scrollbar(f, orient="horizontal", command=self.json_text.xview, style="Thin.Horizontal.TScrollbar")
+        self.json_text.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.json_text.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        f.grid_rowconfigure(0, weight=1); f.grid_columnconfigure(0, weight=1)
+
+    def _build_raw_tab(self, p):
+        f = tk.Frame(p, bg=C["card"]); f.pack(fill="both", expand=True, padx=1, pady=1)
+        self.raw_text = tk.Text(f, font=FONT_MONO,
+                                 bg="#0f172a", fg="#fde68a",
+                                 insertbackground="#fde68a",
+                                 relief="flat", bd=0,
+                                 wrap="word", padx=12, pady=10,
+                                 selectbackground=C["accent"],
+                                 highlightthickness=0)
+        vsb = ttk.Scrollbar(f, orient="vertical", command=self.raw_text.yview, style="Thin.Vertical.TScrollbar")
+        self.raw_text.configure(yscrollcommand=vsb.set)
+        self.raw_text.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        f.grid_rowconfigure(0, weight=1); f.grid_columnconfigure(0, weight=1)
+
+#Widget helpers
+
+    def _section(self, parent, label):
+        """Labelled section block."""
+        f = tk.Frame(parent, bg=C["sidebar"])
+        f.pack(fill="x", padx=16, pady=(12,0))
+        tk.Label(f, text=label, font=FONT_LABEL,
+                 bg=C["sidebar"], fg=C["dim"]).pack(anchor="w")
+        return f
+
+    def _pill_btn(self, parent, text, cmd, color):
+        fg = "#ffffff" if color in (C["accent"], C["green"], C["red"]) else C["text"]
+        btn = tk.Button(parent, text=text, command=cmd,
+                        font=FONT_BODY,
+                        bg=color, fg=fg,
+                        activebackground=C["border"],
+                        activeforeground=fg,
+                        relief="flat", bd=0,
+                        pady=7, cursor="hand2",
+                        highlightthickness=0)
+        self._btn_hover_effect(btn, color, C["border"])
+        return btn
+
+    def _tool_btn(self, parent, text, cmd, color):
+        fg = "#ffffff" if color in (C["accent"], C["green"], C["red"]) else C["text"]
+        btn = tk.Button(parent, text=text, command=cmd,
+                        font=("Segoe UI", 8, "bold"),
+                        bg=color, fg=fg,
+                        activebackground=C["hover"] if color == C["accent"] else C["border"],
+                        activeforeground=fg,
+                        relief="flat", bd=0,
+                        padx=12, pady=5, cursor="hand2",
+                        highlightthickness=0)
+        return btn
+
+    def _btn_hover_effect(self, btn, normal, hover):
+        btn.bind("<Enter>", lambda e: btn.configure(bg=hover))
+        btn.bind("<Leave>", lambda e: btn.configure(bg=normal))
+
+#Tesseract check
+
+    def _check_tesseract(self):
+        try:
+            pytesseract.pytesseract.tesseract_cmd = self.tess_path.get()
+            v = pytesseract.get_tesseract_version()
+            self._set_status(f"Tesseract {v} ready")
+        except Exception:
+            self._set_status("Tesseract not found. Update the path above.", "warning")
+
+#Camera
+
+    def _toggle_camera(self):
+        if self.camera_running: self._stop_camera()
+        else: self._start_camera()
+
+    def _start_camera(self):
+        self.camera = cv2.VideoCapture(0)
+        if not self.camera.isOpened():
+            messagebox.showerror("Error", "Cannot open camera."); return
+        self.camera_running = True
+        self.cam_btn.configure(text="Stop Camera", bg=C["red"], fg="#ffffff")
+        self._set_status("Camera active")
+        self._cam_loop()
+
+    def _stop_camera(self):
+        self.camera_running = False
+        if self.camera: self.camera.release(); self.camera = None
+        self.cam_btn.configure(text="Start Camera", bg=C["card2"], fg=C["text"])
+
+    def _cam_loop(self):
+        if not self.camera_running: return
+        ret, frame = self.camera.read()
+        if ret:
+            self.camera_frame = frame
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(rgb); img.thumbnail((276, 210))
+            photo = ImageTk.PhotoImage(img)
+            self.preview.configure(image=photo, text=""); self.preview.image = photo
+        self.root.after(33, self._cam_loop)
+
+    def _capture(self):
+        if not self.camera_running or self.camera_frame is None:
+            messagebox.showwarning("Notice", "Please start the camera first"); return
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = str(Path.home() / f"receipt_{ts}.jpg")
+        cv2.imwrite(path, self.camera_frame)
+        self.current_path = path
+        self._set_status(f"Captured: {Path(path).name}")
+        self._stop_camera()
+
+#File browse
+
+    def _browse(self):
+        path = filedialog.askopenfilename(
+            title="Select Receipt Image",
+            filetypes=[("Image files","*.jpg *.jpeg *.png *.webp *.gif"),("All files","*.*")])
+        if path:
+            self.current_path = path; self.batch_paths = None
+            self._show_preview(path)
+            self.file_label.set(f"Selected: {Path(path).name}")
+            self._set_status(f"Selected  {Path(path).name}")
+
+    def _browse_multiple(self):
+        paths = filedialog.askopenfilenames(
+            title="Select Multiple Receipt Images",
+            filetypes=[("Image files","*.jpg *.jpeg *.png *.webp *.gif"),("All files","*.*")])
+        if paths:
+            self.batch_paths  = list(paths)
+            self.current_path = paths[0]
+            self._show_preview(paths[0])
+            self.file_label.set(f"Batch selected: {len(paths)} images")
+            self._set_status(f"Selected {len(paths)} images")
+
+    def _show_preview(self, path):
+        try:
+            img = Image.open(path); img.thumbnail((276, 210))
+            photo = ImageTk.PhotoImage(img)
+            self.preview.configure(image=photo, text=""); self.preview.image = photo
+        except Exception as e:
+            self.preview.configure(text=f"Preview error: {e}")
+
+#Scan
+
+    def _start_scan(self):
+        pytesseract.pytesseract.tesseract_cmd = self.tess_path.get()
+        targets = self.batch_paths or ([self.current_path] if self.current_path else None)
+        if not targets:
+            messagebox.showwarning("Notice", "Please select an image or capture a photo first"); return
+        self.batch_paths = None
+        self.scan_btn.configure(state="disabled", text="Scanning...")
+        self.progress.start(10)
+        threading.Thread(target=self._worker, args=(targets,), daemon=True).start()
+
+    def _worker(self, paths):
+        for path in paths:
+            self._set_status(f"Scanning {Path(path).name}...")
+            try:
+                data = scan_receipt(path)
+                self.records.append(data)
+                self.root.after(0, self._update_tables, data)
+                self.root.after(0, self._refresh_chart)
+                self._set_status(
+                    f"{data.get('store_name') or Path(path).stem}"
+                    f"   {data.get('currency','MYR')} {data.get('total','-')}"
+                )
+            except Exception as e:
+                self._set_status(f"{Path(path).name}: {e}", "error")
+        self.root.after(0, self._done)
+
+    def _done(self):
+        self.scan_btn.configure(state="normal", text="Scan Receipt")
+        self.progress.stop()
+        n = len(self.records)
+        self.count_badge.configure(text=str(n))
+
+#Update tables
+
+    def _update_tables(self, data: dict):
+        tag = "even" if len(self.tree.get_children()) % 2 == 0 else "odd"
+        self.tree.insert("", "end", tags=(tag,), values=(
+            data.get("_source_file",""), data.get("store_name",""),
+            data.get("date",""),        data.get("time",""),
+            data.get("receipt_no",""),  data.get("total",""),
+            data.get("currency","MYR"), data.get("payment_method",""),
+        ))
+        for item in (data.get("items") or []):
+            tag2 = "even" if len(self.items_tree.get_children()) % 2 == 0 else "odd"
+            self.items_tree.insert("", "end", tags=(tag2,), values=(
+                data.get("_source_file",""), item.get("name",""),
+                item.get("quantity",""),     item.get("unit_price",""),
+                item.get("total_price",""),
+            ))
+        d = {k: v for k, v in data.items() if k != "_raw_text"}
+        self.json_text.insert("end", json.dumps(d, ensure_ascii=False, indent=2) + "\n\n")
+        self.json_text.see("end")
+        self.raw_text.insert("end", f"-- {data.get('_source_file','')} --\n{data.get('_raw_text','')}\n\n")
+        self.raw_text.see("end")
+
+    def _on_select(self, event):
+        sel = self.tree.selection()
+        if not sel: return
+        idx = self.tree.index(sel[0])
+        if idx < len(self.records):
+            d = {k: v for k, v in self.records[idx].items() if k != "_raw_text"}
+            self.json_text.delete("1.0","end")
+            self.json_text.insert("end", json.dumps(d, ensure_ascii=False, indent=2))
+            self.raw_text.delete("1.0","end")
+            self.raw_text.insert("end", self.records[idx].get("_raw_text",""))
+
+#Export / Clear
+
+    def _export_csv(self):
+        if not self.records:
+            messagebox.showinfo("Notice","No results to export yet"); return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv", filetypes=[("CSV files","*.csv")],
+            initialfile=f"receipts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        if not path: return
+        rows = []
+        for r in self.records:
+            base = {k: v for k, v in r.items() if k not in ("items","_raw_text")}
+            for item in (r.get("items") or [base]):
+                row = base.copy()
+                if r.get("items"):
+                    row.update({"item_name": item.get("name"),
+                                "item_qty": item.get("quantity"),
+                                "item_unit_price": item.get("unit_price"),
+                                "item_total": item.get("total_price")})
+                rows.append(row)
+        fields = list(rows[0].keys())
+        for row in rows:
+            for k in row:
+                if k not in fields: fields.append(k)
+        with open(path,"w",newline="",encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+            w.writeheader(); w.writerows(rows)
+        self._set_status(f"Exported {len(rows)} rows to {Path(path).name}")
+        messagebox.showinfo("Exported", f"Saved to:\n{path}")
+
+    def _clear(self):
+        if not self.records: return
+        if messagebox.askyesno("Confirm","Clear all scan results?"):
+            self.records.clear()
+            for t in [self.tree, self.items_tree]:
+                for i in t.get_children(): t.delete(i)
+            self.json_text.delete("1.0","end")
+            self.raw_text.delete("1.0","end")
+            self.count_badge.configure(text="0")
+            self.file_label.set("No file selected")
+            self._set_status("Cleared")
+
+#Status
+
+    def _set_status(self, msg, level="normal"):
+        color = {"normal": C["green"], "warning": C["accent2"], "error": C["red"]}.get(level, C["green"])
+        self.status_var.set(msg)
+        self.status_lbl.configure(fg=color)
+
+    def on_close(self):
+        self._stop_camera()
+        self.root.destroy()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ReceiptApp(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
+    root.mainloop()
